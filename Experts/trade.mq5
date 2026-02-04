@@ -33,7 +33,7 @@
 #property version   "2.20"
 
 //--- Single Include - Controller manages all dependencies
-#include "Include/ESD/ESD_Controller.mqh"
+#include <ESD/ESD_Controller.mqh>
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |

@@ -551,6 +551,101 @@ bool ESD_IsInBSL_SSLZone(double price, bool is_buy_signal)
     return false;
 }
 
+
+//+------------------------------------------------------------------+
+//| Update Max Loss SL and Reversal Logic                            |
+//| Ensures position has a hard SL and reverses on touch             |
+//+------------------------------------------------------------------+
+void ESD_UpdateMaxLossSL_AndReversal(double maxLossPip)
+{
+    string symbol = _Symbol;
+    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+    double pipValue = (digits == 3 || digits == 5) ? point * 10.0 : point;
+    double maxLossDistance = maxLossPip * pipValue;
+
+    // Iterate through all open positions (Hedging Support)
+    int total_positions = PositionsTotal();
+    for(int i = total_positions - 1; i >= 0; i--)
+    {
+        if(PositionGetSymbol(i) != symbol) continue;
+        
+        ulong ticket = PositionGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        if(PositionGetInteger(POSITION_MAGIC) != ESD_MagicNumber) continue;
+
+        // --- Ambil data posisi aktif ---
+        double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+        double sl = PositionGetDouble(POSITION_SL);
+        double tp = PositionGetDouble(POSITION_TP);
+        long type = PositionGetInteger(POSITION_TYPE); // 0=BUY, 1=SELL
+        double volume = PositionGetDouble(POSITION_VOLUME);
+    
+        double newSL;
+    
+        // Hitung SL baru sesuai arah
+        if (type == POSITION_TYPE_BUY)
+            newSL = openPrice - maxLossDistance;
+        else
+            newSL = openPrice + maxLossDistance;
+    
+        // Update SL jika berbeda
+        if (MathAbs(sl - newSL) > (pipValue / 2.0))
+        {
+            bool mod = ESD_trade.PositionModify(ticket, newSL, tp);
+            if (mod)
+                PrintFormat("✅ [%s] SL Diperbarui: Ticket=%d | Open=%.5f | SL=%.5f",
+                            symbol, ticket, openPrice, newSL);
+            else
+                PrintFormat("❌ [%s] Gagal update SL Ticket=%d | Error %d", symbol, ticket, GetLastError());
+        }
+    
+        // --- Cek apakah posisi sudah kena SL ---
+        double currentPrice = (type == POSITION_TYPE_BUY)
+                                  ? SymbolInfoDouble(symbol, SYMBOL_BID)
+                                  : SymbolInfoDouble(symbol, SYMBOL_ASK);
+    
+        bool slHit = false;
+        if (type == POSITION_TYPE_BUY && currentPrice <= newSL)
+            slHit = true;
+        else if (type == POSITION_TYPE_SELL && currentPrice >= newSL)
+            slHit = true;
+    
+        // Jika SL kena → tutup posisi & entry arah berlawanan
+        if (slHit)
+        {
+            PrintFormat("⚠️ [%s] SL Tersentuh | %s Ticket=%d Kena di Harga=%.5f | SL=%.5f",
+                        symbol, (type == POSITION_TYPE_BUY ? "BUY" : "SELL"), ticket, currentPrice, newSL);
+    
+            // Tutup posisi lama
+            ESD_trade.PositionClose(ticket);
+            Sleep(500);
+    
+            // Entry arah berlawanan + comment di order
+            string commentOrder;
+    
+            if (type == POSITION_TYPE_BUY)
+            {
+                commentOrder = StringFormat("Reversal SELL setelah SL BUY di %.5f (Loss %.0f pip)",
+                                            newSL, maxLossPip);
+                if (ESD_trade.Sell(volume, symbol, 0, 0, 0, commentOrder))
+                    PrintFormat("🔁 %s | SELL dibuka di %.5f | Lot=%.2f | Comment='%s'",
+                                symbol, SymbolInfoDouble(symbol, SYMBOL_BID), volume, commentOrder);
+            }
+            else
+            {
+                commentOrder = StringFormat("Reversal BUY setelah SL SELL di %.5f (Loss %.0f pip)",
+                                            newSL, maxLossPip);
+                if (ESD_trade.Buy(volume, symbol, 0, 0, 0, commentOrder))
+                    PrintFormat("🔁 %s | BUY dibuka di %.5f | Lot=%.2f | Comment='%s'",
+                                symbol, SymbolInfoDouble(symbol, SYMBOL_ASK), volume, commentOrder);
+            }
+        }
+    }
+}
+
+
 //+------------------------------------------------------------------+
 //| HARD CIRCUIT BREAKER: Check Daily Loss Limit                      |
 //| Returns TRUE if trading should be STOPPED (Kill Switch)           |
@@ -567,6 +662,11 @@ bool ESD_CheckHardCircuitBreaker()
     
     // If already tripped, stay blocked
     if (ESD_circuit_breaker_tripped) return true;
+    
+    // THROTTLING: Check only every 10 seconds to save CPU
+    static uint last_check_time = 0;
+    if(GetTickCount() - last_check_time < 10000) return false;
+    last_check_time = GetTickCount();
 
     // Calculate Today's Realized Loss
     HistorySelect(iTime(_Symbol, PERIOD_D1, 0), TimeCurrent());

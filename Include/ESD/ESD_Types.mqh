@@ -203,6 +203,7 @@ struct Experience
     int next_state;
     bool terminal;
     double priority; // PER: Priority (TD Error magnitude)
+    int brain_id;    // 0=Trend, 1=Reversal
 };
 
 #endif // ESD_TYPES_MQH

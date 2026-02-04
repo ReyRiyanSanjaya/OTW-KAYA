@@ -360,6 +360,9 @@ void ESD_AnalysisManager_Update()
     // Session Panel Update
     ESD_DrawSessionPanel();
     
+    // Unified Dashboard Update
+    ESD_DrawUnifiedDashboard();
+    
     // Trend Analysis
     ESD_DetectSupremeTimeframeTrend();
     
@@ -388,6 +391,9 @@ void ESD_AnalysisManager_Update()
 void ESD_SMCManager_Update()
 {
     ESD_DetectSMC();
+    
+    // Check for mitigated/broken structures
+    ESD_CheckMitigation();
 }
 
 //+------------------------------------------------------------------+

@@ -198,6 +198,15 @@ void ESD_SaveMLData()
         // Save Profile
         FileWriteStruct(handle, ESD_CurrentProfile);
         
+        // --- SAVE EXPERIENCE BUFFER ---
+        FileWriteInteger(handle, g_exp_count);
+        FileWriteInteger(handle, g_exp_write_idx);
+        
+        for(int i=0; i<g_exp_count; i++)
+        {
+            FileWriteStruct(handle, g_experience_buffer[i]);
+        }
+        
         FileClose(handle);
         // Print("💾 ML Data Saved.");
     }
@@ -227,6 +236,22 @@ bool ESD_LoadMLData()
             ESD_Brain_Trend = temp_trend;
             ESD_Brain_Reversal = temp_rev;
             if (res3 > 0) ESD_CurrentProfile = temp_profile;
+            
+            // --- LOAD EXPERIENCE BUFFER ---
+            if(!FileIsEnding(handle))
+            {
+               g_exp_count = FileReadInteger(handle);
+               g_exp_write_idx = FileReadInteger(handle);
+               
+               // Sanity check
+               if(g_exp_count > MAX_EXPERIENCES) g_exp_count = MAX_EXPERIENCES;
+               if(g_exp_write_idx >= MAX_EXPERIENCES) g_exp_write_idx = 0;
+               
+               for(int i=0; i<g_exp_count; i++)
+               {
+                   FileReadStruct(handle, g_experience_buffer[i]);
+               }
+            }
             
             FileClose(handle);
             return true;
@@ -477,6 +502,12 @@ void ESD_AdaptParametersWithEnhancedRL(ESD_ML_Features &features)
     // --- Update performance metrics ---
     ESD_UpdateMLPerformance();
     
+    // --- Update Validation Split for Overfitting Detection ---
+    ESD_UpdateValidationSplit();
+    
+    // --- Apply Anti-Overfitting if needed ---
+    ESD_ApplyAntiOverfitting();
+    
     // --- Store previous state (Mental Sandbox) ---
     static int prev_state = -1;
     static int prev_action = -1;
@@ -506,7 +537,8 @@ void ESD_AdaptParametersWithEnhancedRL(ESD_ML_Features &features)
         double td_error = MathAbs(target - old_q);
         
         // Store with Priority
-        StoreExperience(prev_state, prev_action, reward, current_state, (update_counter % 100 == 0), td_error + 0.01);
+        int brain_idx = (features.trend_strength > 0.6) ? 0 : 1;
+        StoreExperience(prev_state, prev_action, reward, current_state, (update_counter % 100 == 0), td_error + 0.01, brain_idx);
         
         // Learn (PER Sampling)
         if (update_counter % 5 == 0) LearnFromExperience(0.1, 0.95);
@@ -701,7 +733,7 @@ double CalculateEnhancedReward(double &old_params[], double &new_params[],
 //+------------------------------------------------------------------+
 //| Store Experience dalam Replay Buffer (With Priority)             |
 //+------------------------------------------------------------------+
-void StoreExperience(int state, int action, double reward, int next_state, bool terminal, double priority=1.0)
+void StoreExperience(int state, int action, double reward, int next_state, bool terminal, double priority=1.0, int brain_id=0)
 {
     g_experience_buffer[g_exp_write_idx].state = state;
     g_experience_buffer[g_exp_write_idx].action = action;
@@ -709,6 +741,7 @@ void StoreExperience(int state, int action, double reward, int next_state, bool 
     g_experience_buffer[g_exp_write_idx].next_state = next_state;
     g_experience_buffer[g_exp_write_idx].terminal = terminal;
     g_experience_buffer[g_exp_write_idx].priority = priority;
+    g_experience_buffer[g_exp_write_idx].brain_id = brain_id;
 
     g_exp_write_idx = (g_exp_write_idx + 1) % MAX_EXPERIENCES;
     if (g_exp_count < MAX_EXPERIENCES)
@@ -750,23 +783,19 @@ void LearnFromExperience(double alpha, double gamma)
         Experience exp = g_experience_buffer[idx];
 
         // 3. Q-Learning Update
-        // Determine which brain this experience belongs to (Simplified context check)
-        // Since we don't store brain_id in basic experience yet, we use global pointer assumption 
-        // OR we just update BOTH/Specific brains if we had stored it.
-        // For V3.1, let's assume we are updating the Trend Brain for now or make it generic.
-        // BETTER: Use State ID to guess Brain? Or just update Trend Brain as default?
-        // Let's use ESD_Brain_Trend as primary learner for Replay or infer from context.
-        // Todo: Add brain_id to Experience struct for perfect dual-brain replay.
-        // For now, let's update Trend Brain (assuming it handles general parameter logic).
+        // Determine which brain this experience belongs to based on stored brain_id
+        ESD_ML_Brain_State *target_brain;
+        if (exp.brain_id == 0) target_brain = &ESD_Brain_Trend;
+        else target_brain = &ESD_Brain_Reversal;
         
         double max_q_next_t = -9999.0;
-        for (int a = 0; a < ACTIONS; a++) if (ESD_Brain_Trend.q_table[exp.next_state][a] > max_q_next_t) max_q_next_t = ESD_Brain_Trend.q_table[exp.next_state][a];
+        for (int a = 0; a < ACTIONS; a++) if (target_brain->q_table[exp.next_state][a] > max_q_next_t) max_q_next_t = target_brain->q_table[exp.next_state][a];
 
         double target = exp.terminal ? exp.reward : exp.reward + gamma * max_q_next_t;
-        double old_q = ESD_Brain_Trend.q_table[exp.state][exp.action];
+        double old_q = target_brain->q_table[exp.state][exp.action];
         double new_q = old_q + alpha * (target - old_q);
         
-        ESD_Brain_Trend.q_table[exp.state][exp.action] = new_q;
+        target_brain->q_table[exp.state][exp.action] = new_q;
         
         // 4. Update Priority (TD Error)
         double td_error = MathAbs(target - old_q);

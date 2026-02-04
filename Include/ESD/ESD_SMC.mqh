@@ -1038,9 +1038,75 @@ double ESD_CalculateFVGQuality(int index, const double &high_buffer[], const dou
 
 void ESD_AddToHistoricalStructures(ESD_SMStructure &structure)
 {
-    int size = ArraySize(ESD_smc_structures);
-    ArrayResize(ESD_smc_structures, size + 1);
-    ESD_smc_structures[size] = structure;
+    // Prevent Duplicates: Check if structure with same time and type exists
+    int total = ArraySize(ESD_smc_structures);
+    for(int i=0; i<total; i++)
+    {
+        if(ESD_smc_structures[i].time == structure.time && 
+           ESD_smc_structures[i].type == structure.type)
+        {
+           return; // Already exists
+        }
+    }
+
+    // Add new structure
+    ArrayResize(ESD_smc_structures, total + 1);
+    ESD_smc_structures[total] = structure;
+    
+    // Maintain Buffer Size (Keep last 100 structures to save memory)
+    if(total > 100)
+    {
+        ArrayRemove(ESD_smc_structures, 0, 1);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| MITIGATION CHECK: Mark structures as broken/mitigated           |
+//+------------------------------------------------------------------+
+void ESD_CheckMitigation()
+{
+    int total = ArraySize(ESD_smc_structures);
+    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+    
+    for(int i=0; i<total; i++)
+    {
+        if(ESD_smc_structures[i].mitigated) continue;
+        
+        bool broken = false;
+        
+        // FVG Mitigation (Fill)
+        if(ESD_smc_structures[i].type == "FVG")
+        {
+            if(ESD_smc_structures[i].is_bullish)
+            {
+                if(bid < ESD_smc_structures[i].bottom) broken = true; // Price broke below
+            }
+            else
+            {
+                if(ask > ESD_smc_structures[i].top) broken = true; // Price broke above
+            }
+        }
+        // OB Mitigation (Touch or Break)
+        else if(ESD_smc_structures[i].type == "OB")
+        {
+             // For OB, we might want to keep it until broken significantly
+             // Here we assume "broken" means invalidated
+            if(ESD_smc_structures[i].is_bullish)
+            {
+                if(bid < ESD_smc_structures[i].bottom) broken = true;
+            }
+            else
+            {
+                if(ask > ESD_smc_structures[i].top) broken = true;
+            }
+        }
+        
+        if(broken)
+        {
+            ESD_smc_structures[i].mitigated = true;
+        }
+    }
 }
 
 

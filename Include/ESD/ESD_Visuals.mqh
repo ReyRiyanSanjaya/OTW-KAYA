@@ -451,6 +451,12 @@ void ESD_DrawSystemInfoPanel()
 
 void ESD_DrawUnifiedDashboard()
 {
+    // THROTTLING: Update only once per second to prevent lag
+    static uint last_update_ms = 0;
+    if (GetTickCount() - last_update_ms < 1000)
+        return;
+    last_update_ms = GetTickCount();
+
     // Check conditions
     bool show_filters = ESD_ShowFilterMonitor;
     bool show_trading = ESD_ShowTradingData;
@@ -476,7 +482,9 @@ void ESD_DrawUnifiedDashboard()
     string header_accent = "ESD_HeaderAccent";
     string pulse_effect = "ESD_PulseEffect";
 
-    // Clean old objects
+    // Clean old objects - OPTIMIZED: Removed aggressive deletion to prevent flickering
+    // Objects will be updated or created as needed
+    /*
     for (int i = 0; i < 400; i++)
         ObjectDelete(0, base_name + IntegerToString(i));
     ObjectDelete(0, main_panel);
@@ -490,6 +498,7 @@ void ESD_DrawUnifiedDashboard()
     ObjectDelete(0, glow_effect);
     ObjectDelete(0, header_accent);
     ObjectDelete(0, pulse_effect);
+    */
 
     // Update data
     if (show_filters)

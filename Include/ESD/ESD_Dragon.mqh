@@ -169,25 +169,35 @@ void DragonMomentum()
       // Eksekusi trade jika memenuhi kriteria
       if(shouldEntry)
       {
-         MqlTradeRequest request = {};
-         MqlTradeResult result = {};
+         // Retry Loop for robustness (up to 3 times)
+         int max_retries = 3;
+         bool executed = false;
          
-         request.action = TRADE_ACTION_DEAL;
-         request.symbol = _Symbol;
-         request.volume = DragonScale;
-         request.type = orderType;
-         request.price = entryPrice;
-         request.sl = sl;
-         request.tp = tp;
-         request.deviation = 10;
-         request.magic = mysticalSeal;
-         request.comment = "Dragon Momentum v2";
-         
-         if(OrderSend(request, result) && result.retcode == TRADE_RETCODE_DONE)
+         for(int i=0; i<max_retries; i++)
          {
-            lastCandleTime = currentCandle[0].time;
-            Print("🐉 Entry Dragon v2 ", orderType == ORDER_TYPE_BUY ? "BUY" : "SELL", 
-                  " | ATR SL: ", Dragon_UseATR);
+            bool res = false;
+            if(orderType == ORDER_TYPE_BUY)
+               res = ESD_trade.Buy(DragonScale, _Symbol, entryPrice, sl, tp, "Dragon Momentum v2");
+            else
+               res = ESD_trade.Sell(DragonScale, _Symbol, entryPrice, sl, tp, "Dragon Momentum v2");
+               
+            if(res)
+            {
+               executed = true;
+               lastCandleTime = currentCandle[0].time;
+               Print("🐉 Entry Dragon v2 ", orderType == ORDER_TYPE_BUY ? "BUY" : "SELL", 
+                     " | ATR SL: ", Dragon_UseATR);
+               break;
+            }
+            else
+            {
+               Print("⚠️ Dragon Entry Failed (Retry ", i+1, "/", max_retries, ") Error: ", GetLastError());
+               Sleep(100); // Wait 100ms before retry
+               
+               // Update price for retry
+               if(orderType == ORDER_TYPE_BUY) entryPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+               else entryPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            }
          }
       }
       else
@@ -198,83 +208,5 @@ void DragonMomentum()
 }
 
 
-void UpdateMaxLossSL_AndReversal(double maxLossPip)
-{
-    string symbol = _Symbol;
-    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-    double pipValue = (digits == 3 || digits == 5) ? point * 10.0 : point;
-    double maxLossDistance = maxLossPip * pipValue;
+// --- FUNCTION REMOVED (MOVED TO ESD_RISK.MQH) ---
 
-    // Jika tidak ada posisi aktif, hentikan
-    if (!PositionSelect(symbol))
-        return;
-
-    // --- Ambil data posisi aktif ---
-    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-    double sl = PositionGetDouble(POSITION_SL);
-    double tp = PositionGetDouble(POSITION_TP);
-    long type = PositionGetInteger(POSITION_TYPE); // 0=BUY, 1=SELL
-    double volume = PositionGetDouble(POSITION_VOLUME);
-
-    double newSL;
-
-    // Hitung SL baru sesuai arah
-    if (type == POSITION_TYPE_BUY)
-        newSL = openPrice - maxLossDistance;
-    else
-        newSL = openPrice + maxLossDistance;
-
-    // Update SL jika berbeda
-    if (MathAbs(sl - newSL) > (pipValue / 2.0))
-    {
-        bool mod = ESD_trade.PositionModify(symbol, newSL, tp);
-        if (mod)
-            PrintFormat("✅ [%s] SL Diperbarui: Open=%.5f | SL=%.5f | MaxLoss=%.0f pip",
-                        symbol, openPrice, newSL, maxLossPip);
-        else
-            PrintFormat("❌ [%s] Gagal update SL | Error %d", symbol, GetLastError());
-    }
-
-    // --- Cek apakah posisi sudah kena SL ---
-    double currentPrice = (type == POSITION_TYPE_BUY)
-                              ? SymbolInfoDouble(symbol, SYMBOL_BID)
-                              : SymbolInfoDouble(symbol, SYMBOL_ASK);
-
-    bool slHit = false;
-    if (type == POSITION_TYPE_BUY && currentPrice <= newSL)
-        slHit = true;
-    else if (type == POSITION_TYPE_SELL && currentPrice >= newSL)
-        slHit = true;
-
-    // Jika SL kena → tutup posisi & entry arah berlawanan
-    if (slHit)
-    {
-        PrintFormat("⚠️ [%s] SL Tersentuh | %s Kena di Harga=%.5f | SL=%.5f",
-                    symbol, (type == POSITION_TYPE_BUY ? "BUY" : "SELL"), currentPrice, newSL);
-
-        // Tutup posisi lama
-        ESD_trade.PositionClose(symbol);
-        Sleep(500);
-
-        // Entry arah berlawanan + comment di order
-        string commentOrder;
-
-        if (type == POSITION_TYPE_BUY)
-        {
-            commentOrder = StringFormat("Reversal SELL setelah SL BUY di %.5f (Loss %.0f pip)",
-                                        newSL, maxLossPip);
-            if (ESD_trade.Sell(volume, symbol, 0, 0, 0, commentOrder))
-                PrintFormat("🔁 %s | SELL dibuka di %.5f | Lot=%.2f | Comment='%s'",
-                            symbol, SymbolInfoDouble(symbol, SYMBOL_BID), volume, commentOrder);
-        }
-        else
-        {
-            commentOrder = StringFormat("Reversal BUY setelah SL SELL di %.5f (Loss %.0f pip)",
-                                        newSL, maxLossPip);
-            if (ESD_trade.Buy(volume, symbol, 0, 0, 0, commentOrder))
-                PrintFormat("🔁 %s | BUY dibuka di %.5f | Lot=%.2f | Comment='%s'",
-                            symbol, SymbolInfoDouble(symbol, SYMBOL_ASK), volume, commentOrder);
-        }
-    }
-}
